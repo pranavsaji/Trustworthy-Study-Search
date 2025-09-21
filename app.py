@@ -1,8 +1,7 @@
-import os
 import time
 import gradio as gr
 from dotenv import load_dotenv
-from typing import List, Dict, Any
+from typing import List, Dict
 from utils.config import AppConfig
 from utils.scoring import score_items, sort_and_trim
 from utils.parsing import normalize_items, ResultItem
@@ -18,29 +17,47 @@ load_dotenv()
 cfg = AppConfig.from_env()
 
 @timed_lru_cache(seconds=300)
-def aggregated_search(query: str, max_items: int, use_web: bool, use_videos: bool) -> Dict[str, List[ResultItem]]:
+def aggregated_search(
+    query: str,
+    max_items: int,
+    use_web: bool,
+    use_videos: bool
+) -> Dict[str, List[ResultItem]]:
+    """
+    Aggregate sources -> normalize -> score -> split into sections.
+    Now supports larger result sizes and reorders Videos to the top.
+    """
+    # To get enough good items per section, pull more than we plan to show.
+    # Cap the total fetch to keep things snappy.
+    fetch_n_core = min(60, max(12, max_items * 2))
+    fetch_n_web  = min(100, max(15, max_items * 3))
+    fetch_n_vid  = min(100, max(15, max_items * 3))
+
     items: List[ResultItem] = []
-    items += search_wikipedia(query, limit=8)
-    items += search_arxiv(query, limit=8)
-    items += search_pubmed(query, limit=8)
-    items += search_crossref(query, limit=8)
+    items += search_wikipedia(query, limit=min(20, fetch_n_core))
+    items += search_arxiv(query,     limit=min(30, fetch_n_core))
+    items += search_pubmed(query,    limit=min(30, fetch_n_core))
+    items += search_crossref(query,  limit=min(30, fetch_n_core))
+
     if use_web:
-        items += search_web(query, limit=10, cfg=cfg)
+        items += search_web(query, limit=fetch_n_web, cfg=cfg)
     if use_videos:
-        items += search_youtube(query, limit=10, cfg=cfg)
+        items += search_youtube(query, limit=fetch_n_vid, cfg=cfg)
+
     items = normalize_items(items)
     items = score_items(items)
+
+    # NOTE: Videos first per your request.
     return {
+        "Videos / Lectures":      sort_and_trim([i for i in items if i.meta.get("kind") in ["video", "lecture"]], max_items),
         "Overview / Encyclopedic": sort_and_trim([i for i in items if i.meta.get("kind") in ["encyclopedia", "reference"]], max_items),
         "Peer-reviewed / Research": sort_and_trim([i for i in items if i.meta.get("kind") in ["journal", "preprint", "research"]], max_items),
         "Articles / Web":         sort_and_trim([i for i in items if i.meta.get("kind") in ["article", "news", "blog"]], max_items),
-        "Videos / Lectures":      sort_and_trim([i for i in items if i.meta.get("kind") in ["video", "lecture"]], max_items),
     }
 
 def _cards_html(section: str, items: List[ResultItem]) -> str:
     if not items:
         return f"<h3>{section}</h3><p><em>No results.</em></p>"
-    # Simple responsive card grid with inline CSS (kept minimal for Gradio)
     html = [f"""
     <style>
       .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }}
@@ -61,9 +78,9 @@ def _cards_html(section: str, items: List[ResultItem]) -> str:
         src = it.source or ""
         year = it.meta.get("year")
         year_str = f" · {year}" if year else ""
-        img = it.image or ""
+        img = getattr(it, "image", None) or ""
         img_tag = f'<img src="{img}" alt="preview" loading="lazy" />' if img else ""
-        snippet = (it.snippet or "")[:200]
+        snippet = (it.snippet or "")[:220]
         html.append(f"""
           <div class="card">
             {img_tag}
@@ -76,16 +93,19 @@ def _cards_html(section: str, items: List[ResultItem]) -> str:
     return "\n".join(html)
 
 def do_search(query: str, use_web: bool, use_videos: bool, max_items: int):
-    if not query or len(query.strip()) < 3:
+    q = (query or "").strip()
+    if len(q) < 3:
         return "<p>Please enter a topic (≥ 3 characters).</p>"
-    query = query.strip()
+
     t0 = time.time()
-    bundles = aggregated_search(query, max_items=max(3, min(max_items, 20)), use_web=use_web, use_videos=use_videos)
+    bundles = aggregated_search(q, max_items=max(3, min(max_items, 100)), use_web=use_web, use_videos=use_videos)
     elapsed = time.time() - t0
-    header = f"<h2>Results for <strong>{query}</strong></h2><p><em>Built sections in {elapsed:.2f}s (showing up to {max_items} per section).</em></p>"
+
+    header = f"<h2>Results for <strong>{q}</strong></h2><p><em>Built sections in {elapsed:.2f}s (showing up to {max_items} per section).</em></p>"
     sections_html = []
-    for title, lst in bundles.items():
-        sections_html.append(_cards_html(title, lst))
+    # Preserve the order returned by aggregated_search
+    for title in ["Videos / Lectures", "Overview / Encyclopedic", "Peer-reviewed / Research", "Articles / Web"]:
+        sections_html.append(_cards_html(title, bundles.get(title, [])))
     return header + "\n".join(sections_html)
 
 with gr.Blocks(title="Trustworthy Study Search", theme=gr.themes.Soft()) as demo:
@@ -93,14 +113,15 @@ with gr.Blocks(title="Trustworthy Study Search", theme=gr.themes.Soft()) as demo
     with gr.Row():
         query = gr.Textbox(label="Topic", placeholder="e.g., reinforcement learning, CRISPR gene editing, HTTP/3...")
     with gr.Row():
-        use_web = gr.Checkbox(label="Include reputable web articles (requires API key for best results)", value=False)
+        use_web = gr.Checkbox(label="Include reputable web articles (uses your SerpAPI/Google CSE keys if set)", value=True)  # default ON
         use_videos = gr.Checkbox(label="Include videos / lectures", value=True)
-        max_items = gr.Slider(3, 20, value=5, step=1, label="Max items per section")
+        # Allow larger result counts
+        max_items = gr.Slider(3, 100, value=12, step=1, label="Max items per section")
     with gr.Row():
         btn = gr.Button("Search", variant="primary")
-    out = gr.HTML("")  # switched to HTML to render cards with images
+    out = gr.HTML("")
     btn.click(fn=do_search, inputs=[query, use_web, use_videos, max_items], outputs=[out])
-    gr.Markdown("---\n**Tips:** Add API keys in `.env` to enable richer web and video results. Click any title to open the source.")
+    gr.Markdown("---\n**Tip:** Add API keys in `.env` to enable richer web results and thumbnails.")
 
 if __name__ == "__main__":
     demo.launch()
