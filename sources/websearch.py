@@ -5,25 +5,27 @@ from utils.parsing import ResultItem
 from utils.config import AppConfig
 from utils.preview import fetch_og_image
 
-# Expanded trusted hints so common, reputable docs/tutorial sites show up.
+# Expanded trusted hints
 WHITELIST_HINTS = [
-    # General reputable
     ".edu", ".gov", "britannica.com", "reuters.com", "apnews.com",
-    # Science/health
     "nature.com", "science.org", "sciencedirect.com", "springer.com", "nih.gov", "who.int",
-    # Developer documentation (common trustworthy sources)
     "developer.mozilla.org", "docs.python.org", "nodejs.org", "go.dev", "rust-lang.org",
     "kubernetes.io", "docker.com", "react.dev", "vuejs.org", "angular.io",
     "pytorch.org", "tensorflow.org", "scikit-learn.org", "numpy.org", "pandas.pydata.org",
     "cloud.google.com", "aws.amazon.com", "azure.microsoft.com", "learn.microsoft.com",
     "oracle.com", "ibm.com/docs", "vercel.com/docs", "postgresql.org", "mysql.com", "mariadb.org",
-    # Learning sites with solid editorial vetting
-    "khanacademy.org", "freecodecamp.org", "digitalocean.com"
+    "khanacademy.org", "freecodecamp.org", "digitalocean.com", "wikipedia.org"
 ]
 
 def _looks_trustworthy(url: str) -> bool:
     u = (url or "").lower()
     return any(h in u for h in WHITELIST_HINTS)
+
+def _kind_for_domain(url: str) -> str:
+    u = (url or "").lower()
+    if "wikipedia.org" in u or "britannica.com" in u:
+        return "encyclopedia"  # promote to Overview
+    return "article"
 
 def _serpapi(query: str, limit: int, key: str) -> List[ResultItem]:
     out: List[ResultItem] = []
@@ -50,7 +52,7 @@ def _serpapi(query: str, limit: int, key: str) -> List[ResultItem]:
                     url=link,
                     snippet=snippet,
                     source="Web (SerpAPI)",
-                    meta={"kind": "article"},
+                    meta={"kind": _kind_for_domain(link)},
                     image=thumb
                 ))
                 if len(out) >= limit:
@@ -62,7 +64,7 @@ def _serpapi(query: str, limit: int, key: str) -> List[ResultItem]:
 def _google_cse(query: str, limit: int, cx: str, key: str) -> List[ResultItem]:
     out: List[ResultItem] = []
     try:
-        page_size = 10  # CSE max per request
+        page_size = 10
         pages = math.ceil(min(limit, 100) / page_size)
         for page in range(pages):
             start = page * page_size + 1
@@ -89,7 +91,7 @@ def _google_cse(query: str, limit: int, cx: str, key: str) -> List[ResultItem]:
                     url=link,
                     snippet=snippet,
                     source="Web (Google CSE)",
-                    meta={"kind": "article"},
+                    meta={"kind": _kind_for_domain(link)},
                     image=thumb
                 ))
                 if len(out) >= limit:
