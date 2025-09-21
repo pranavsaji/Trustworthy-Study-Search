@@ -1,0 +1,50 @@
+# --- OS / IDE ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.iml
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.python-version
+.venv/
+venv/
+env/
+
+# --- Packaging / build ---
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Testing / tools ---
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ruff_cache/
+.pytype/
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+
+# --- Env / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Logs / temp ---
+*.log
+logs/
+.tmp/
+.cache/
+
+# --- Gradio ---
+gradio_cached_examples/
+gradio_cache/
